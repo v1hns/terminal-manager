@@ -436,8 +436,8 @@ def main(stdscr):
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def check_terminal_app() -> bool:
-    r = subprocess.run(["pgrep", "-x", "Terminal"], capture_output=True)
-    return r.returncode == 0
+    out = osascript('tell application "System Events" to (name of processes) contains "Terminal"')
+    return out == "true"
 
 
 if __name__ == "__main__":
@@ -447,6 +447,7 @@ if __name__ == "__main__":
 
     if not check_terminal_app():
         print("Terminal.app doesn't appear to be running.")
+        print("Open Terminal.app first, then run tm again.")
         sys.exit(1)
 
     try:
