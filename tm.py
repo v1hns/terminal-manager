@@ -418,7 +418,7 @@ def main(stdscr):
                     loader.stop()
                     curses.endwin()
                     switch_to(tab.tty)
-                    sys.exit(0)
+                    return
 
             elif key in (ord("R"), curses.KEY_F5):
                 tabs = get_tabs()
