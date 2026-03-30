@@ -201,12 +201,18 @@ _CATEGORIES: List[Tuple] = [
 
 def tab_category(tab: Tab) -> Tuple[int, str]:
     """Return (color_pair, 4-char label) based on title/process keywords."""
+    # Claude Code sets titles prefixed with ✳ or braille spinner chars (U+2800–U+28FF)
+    if tab.title and (tab.title[0] == "\u2733" or 0x2800 <= ord(tab.title[0]) <= 0x28FF):
+        return 11, "AI  "
     haystack = (tab.title + " " + tab.process).lower()
-    tokens = set(re.split(r"[\s/\-_.]", haystack))
+    words = set(re.split(r"[\s/\-_.]", haystack))
     for keywords, cp, label in _CATEGORIES:
-        if tokens & keywords:
+        if words & keywords:
             return cp, label
-    return 4, "    "
+        # prefix match: "testing" → "test", "nodejs" → "node"  (min 4-char keyword)
+        if any(w.startswith(kw) for w in words for kw in keywords if len(kw) >= 4):
+            return cp, label
+    return 8, ""  # fallback: dim, no badge
 
 
 def tab_state(tab: Tab) -> Tuple[str, str, int]:
@@ -214,9 +220,9 @@ def tab_state(tab: Tab) -> Tuple[str, str, int]:
     if tab.busy:
         proc = tab.process.lstrip("-")
         if proc not in _SHELL_PROCS:
-            return "▶", proc, 1      # named process running — green
-        return "▶", "running", 1     # shell is busy — green
-    return "─", "idle", 8            # waiting for prompt — dim
+            return "●", proc, 1      # named process running — green
+        return "●", "running", 1     # shell is busy — green
+    return "○", "idle", 8            # waiting for prompt — dim
 
 
 # ─── Drawing ─────────────────────────────────────────────────────────────────
@@ -276,8 +282,8 @@ def draw(stdscr, tabs: List[Tab], selected: int, loader: PreviewLoader,
         cat_cp, cat_label = tab_category(tab)
         ind, _state_text, state_cp = tab_state(tab)
 
-        # Fixed-width badge on the right edge: "[TEST]" = 6 chars
-        badge = f"[{cat_label}]"
+        # Fixed-width badge on the right edge: "[TEST]" = 6 chars, blank if no category
+        badge = f"[{cat_label}]" if cat_label.strip() else " " * 6
 
         # Middle: "Win X [Tab Y]  title"
         info = f"Win {tab.win_idx}"
