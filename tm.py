@@ -181,21 +181,61 @@ class PreviewLoader(threading.Thread):
                     pass
 
 
+# ─── Tab categorisation & state ──────────────────────────────────────────────
+
+_SHELL_PROCS = {"-zsh", "zsh", "bash", "-bash", "fish", "-fish",
+                "sh", "-sh", "dash", "tcsh", "-tcsh"}
+
+# (keyword_set, color_pair, 4-char label)  — first match wins
+_CATEGORIES: List[Tuple] = [
+    ({"claude", "anthropic"},                                           11, "AI  "),
+    ({"pytest", "jest", "vitest", "mocha", "rspec", "test", "spec"},    1,  "TEST"),
+    ({"git", "gh", "tig", "lazygit"},                                   12, "GIT "),
+    ({"vim", "nvim", "nano", "emacs", "helix", "hx"},                   8,  "EDIT"),
+    ({"node", "npm", "yarn", "bun", "tsx", "ts-node", "deno"},          3,  "JS  "),
+    ({"python", "python3", "pip", "uv", "ipython", "jupyter"},          2,  "PY  "),
+    ({"docker", "kubectl", "k9s", "helm", "terraform"},                 6,  "OPS "),
+    ({"cargo", "rustc"},                                                12,  "RS  "),
+]
+
+
+def tab_category(tab: Tab) -> Tuple[int, str]:
+    """Return (color_pair, 4-char label) based on title/process keywords."""
+    haystack = (tab.title + " " + tab.process).lower()
+    tokens = set(re.split(r"[\s/\-_.]", haystack))
+    for keywords, cp, label in _CATEGORIES:
+        if tokens & keywords:
+            return cp, label
+    return 4, "    "
+
+
+def tab_state(tab: Tab) -> Tuple[str, str, int]:
+    """Return (indicator_char, state_text, color_pair)."""
+    if tab.busy:
+        proc = tab.process.lstrip("-")
+        if proc not in _SHELL_PROCS:
+            return "▶", proc, 1      # named process running — green
+        return "▶", "running", 1     # shell is busy — green
+    return "─", "idle", 8            # waiting for prompt — dim
+
+
 # ─── Drawing ─────────────────────────────────────────────────────────────────
 
 def init_colors():
     curses.start_color()
     curses.use_default_colors()
-    curses.init_pair(1,  curses.COLOR_GREEN,   -1)   # busy / active
+    curses.init_pair(1,  curses.COLOR_GREEN,   -1)   # busy / running
     curses.init_pair(2,  curses.COLOR_CYAN,    -1)   # window header
-    curses.init_pair(3,  curses.COLOR_YELLOW,  -1)   # hint / label
+    curses.init_pair(3,  curses.COLOR_YELLOW,  -1)   # hint / label / JS
     curses.init_pair(4,  curses.COLOR_WHITE,   -1)   # normal
     curses.init_pair(5,  curses.COLOR_BLACK,   curses.COLOR_CYAN)  # selected
-    curses.init_pair(6,  curses.COLOR_RED,     -1)   # error
+    curses.init_pair(6,  curses.COLOR_RED,     -1)   # error / git / ops
     curses.init_pair(7,  curses.COLOR_WHITE,   curses.COLOR_BLACK) # header/footer
-    curses.init_pair(8,  curses.COLOR_BLUE,    -1)   # dim path / idle
+    curses.init_pair(8,  curses.COLOR_BLUE,    -1)   # dim / idle / editor
     curses.init_pair(9,  curses.COLOR_WHITE,   -1)   # preview
     curses.init_pair(10, curses.COLOR_BLACK,   curses.COLOR_GREEN) # selected+busy
+    curses.init_pair(11, curses.COLOR_MAGENTA, -1)   # AI / claude category
+    curses.init_pair(12, curses.COLOR_RED,     -1)   # git / ops / rust category
 
 
 def safe(stdscr, y, x, text, attr=0):
@@ -233,28 +273,40 @@ def draw(stdscr, tabs: List[Tab], selected: int, loader: PreviewLoader,
         is_sel  = (i == selected)
         is_busy = tab.busy
 
-        indicator = "● " if is_busy else "○ "
-        label = f" {indicator}Win {tab.win_idx}"
+        cat_cp, cat_label = tab_category(tab)
+        ind, _state_text, state_cp = tab_state(tab)
+
+        # Fixed-width badge on the right edge: "[TEST]" = 6 chars
+        badge = f"[{cat_label}]"
+
+        # Middle: "Win X [Tab Y]  title"
+        info = f"Win {tab.win_idx}"
         if tab.tab_idx > 1:
-            label += f" Tab {tab.tab_idx}"
-
-        # Truncate title to fit
-        title_space = list_w - len(label) - 2
+            info += f" Tab {tab.tab_idx}"
+        mid_w = list_w - 8   # 2 for indicator, 6 for badge
         title = tab.title if tab.title else tab.process
-        if len(title) > title_space:
+        title_space = mid_w - len(info) - 2
+        if title_space > 0 and len(title) > title_space:
             title = title[:title_space - 1] + "…"
-        row = f"{label}  {title}"
+        elif title_space <= 0:
+            title = ""
+        mid = f"{info}  {title}".ljust(mid_w)[:mid_w]
 
-        if is_sel and is_busy:
-            attr = curses.color_pair(10) | curses.A_BOLD
-        elif is_sel:
-            attr = curses.color_pair(5) | curses.A_BOLD
+        if is_sel:
+            row_attr  = curses.color_pair(5) | curses.A_BOLD
+            badge_attr = curses.color_pair(5) | curses.A_BOLD
         elif is_busy:
-            attr = curses.color_pair(1)
+            row_attr  = curses.color_pair(cat_cp) | curses.A_BOLD
+            badge_attr = curses.color_pair(cat_cp) | curses.A_BOLD
         else:
-            attr = curses.color_pair(8)
+            row_attr  = curses.color_pair(cat_cp)
+            badge_attr = curses.color_pair(cat_cp) | curses.A_BOLD
 
-        safe(stdscr, y, 0, row.ljust(list_w)[:list_w], attr)
+        ind_attr = curses.color_pair(state_cp) | (curses.A_BOLD if is_busy else 0)
+
+        safe(stdscr, y, 0,          f"{ind} ",  ind_attr)
+        safe(stdscr, y, 2,          mid,         row_attr)
+        safe(stdscr, y, list_w - 6, badge,       badge_attr)
 
     # Fill rest of left column
     for y in range(1 + len(tabs), h - 1):
@@ -281,12 +333,20 @@ def draw(stdscr, tabs: List[Tab], selected: int, loader: PreviewLoader,
             safe(stdscr, y, det_x + 1, text[:det_w], attr)
             y += 1
 
+        cat_cp, cat_label = tab_category(tab)
+        ind, state_text, state_cp = tab_state(tab)
+
         put(f"Window  {tab.win_idx}" +
             (f"  Tab {tab.tab_idx}" if tab.tab_idx > 1 else ""), 2, True)
-        put(f"Status  {'running' if tab.busy else 'idle'}",
-            1 if tab.busy else 8)
-        put(f"Process {tab.process}", 4)
-        put(f"TTY     {tab.tty}", 8)
+        put("")
+        put(f"  {ind}  {state_text.upper()}", state_cp, bold=True)
+        proc = tab.process.lstrip("-")
+        if tab.busy and proc not in _SHELL_PROCS:
+            put(f"       {proc}", cat_cp, bold=True)
+        put("")
+        if cat_label.strip():
+            put(f"Category  [{cat_label.strip()}]", cat_cp, bold=True)
+        put(f"TTY       {tab.tty}", 8)
         put("")
 
         if tab.title:
