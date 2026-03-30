@@ -416,7 +416,6 @@ def main(stdscr):
                 if tabs:
                     tab = tabs[selected]
                     loader.stop()
-                    curses.endwin()
                     switch_to(tab.tty)
                     return
 
